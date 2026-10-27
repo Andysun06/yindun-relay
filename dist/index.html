@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>隐盾演示中转站</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+           font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+           background: #f6faf7; color: #1f2a24; }
+    .card { max-width: 560px; padding: 32px 36px; background: #fff; border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 88, 38, .08); line-height: 1.7; }
+    h1 { margin: 0 0 8px; font-size: 22px; color: #005826; }
+    code { background: #eef6f1; padding: 2px 6px; border-radius: 6px; }
+    .muted { color: #6b7a72; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🛡️ 隐盾演示中转站</h1>
+    <p>这是「隐盾安全智能体」的演示用模型中转服务（OpenCode Go · <code>deepseek-v4.1-flash</code>）。</p>
+    <p>模型 Key 只保存在服务端环境变量中；本服务只接受隐盾客户端（门禁头 + UA），
+       并有模型白名单与频率限制。</p>
+    <p class="muted">健康检查：<code>GET /api/ai/healthz</code> ·
+       对话接口：<code>POST /api/ai/chat/completions</code></p>
+  </div>
+</body>
+</html>
