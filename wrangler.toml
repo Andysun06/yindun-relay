@@ -1,0 +1,5 @@
+name = "yindun-relay"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+# 变量在 Cloudflare 控制台配置（Settings → Variables and Secrets）：
+#   OPENCODE_API_KEY（Secret）  可选 ALLOWED_MODELS / ALLOWED_ORIGINS
