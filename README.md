@@ -5,17 +5,32 @@
 
 - API Key 只存在 Cloudflare 环境变量 `OPENCODE_API_KEY` 里，**客户端零凭据**；
 - 本仓库任何文件都不包含可用 key；
-- 上游地址是代码里的字面量常量，**不接受任何运行时改写**（防 SSRF）。
+- 上游地址是代码里的字面量常量，**不接受任何运行时改写**（防 SSRF）；
+- 只接受**隐盾客户端**的请求（两个门禁请求头 + `Yindun/` UA），其它来源一律 `403`。
 
 ## 路由
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `POST` | `/api/ai/chat/completions` | OpenAI 兼容的对话补全；支持 `tools`（函数调用）与 `stream:true` 透传 |
-| `GET` | `/api/ai/healthz` | 健康检查，返回 `{ ok, configured, ts }` |
-| `OPTIONS` | 上述两条 | CORS 预检（回显白名单 Origin，绝不返回 `*`） |
+| 方法 | 路径 | 门禁 | 说明 |
+| --- | --- | --- | --- |
+| `POST` | `/api/ai/chat/completions` | **需要** | OpenAI 兼容的对话补全；支持 `tools`（函数调用）与 `stream:true` 透传 |
+| `GET` | `/api/ai/healthz` | 不需要 | 健康检查，返回 `{ ok, configured, ts }` |
+| `OPTIONS` | 上述两条 | 不需要 | CORS 预检（回显白名单 Origin，绝不返回 `*`） |
 
 其它方法一律 `405 Method Not Allowed`。
+
+## 客户端门禁（只接受隐盾客户端）
+
+`POST /api/ai/chat/completions` 必须同时带齐以下三项，**缺任一或值不符一律 `403`**，
+响应体固定为 `{"error":{"message":"仅限隐盾客户端"}}`：
+
+| 位置 | 名称 | 值 |
+| --- | --- | --- |
+| 请求头 | `x-yindun-client` | `yindun-desktop` |
+| 请求头 | `x-yindun-token` | `yd_demo_7f3a9c1e5b2d4f6081a3c5e7d9b0f2a4` |
+| 请求头 | `user-agent` | 以 `Yindun/` 开头，例如 `Yindun/3.6.21` |
+
+> `GET /api/ai/healthz` 不设门禁（客户端需要在握手阶段就能探测可达性），但它不含任何敏感信息。
+
 
 ## 部署（Cloudflare Pages，约 3 分钟）
 
@@ -40,6 +55,21 @@ https://<项目>.pages.dev/api/ai
 
 （客户端会拼成 `/api/ai/chat/completions` 与 `/api/ai/healthz`。）
 
+调用 `completions` 时必须按上节「客户端门禁」带齐两个请求头，并把 `User-Agent` 设为
+`Yindun/<版本>`（示例）：
+
+```http
+POST /api/ai/chat/completions HTTP/1.1
+Host: <项目>.pages.dev
+Content-Type: application/json
+x-yindun-client: yindun-desktop
+x-yindun-token: yd_demo_7f3a9c1e5b2d4f6081a3c5e7d9b0f2a4
+User-Agent: Yindun/3.6.21
+```
+
+> 转发到 OpenCode 上游时，中转站会**替换**成浏览器 UA（`Yindun/` UA 只用于客户端→中转站这一跳），
+> 否则 Cloudflare 会以 `403 error code 1010` 拦截。
+
 ## 上游两个硬要求（已内置，勿删）
 
 | 要求 | 不处理的后果 | 本仓库做法 |
@@ -51,13 +81,16 @@ https://<项目>.pages.dev/api/ai
 
 | 风险 | 对策 |
 | --- | --- |
-| Key 被客户端/安装包提取 | Key 只在 Cloudflare 环境变量（Secret），客户端零凭据 |
+| **非隐盾客户端**顺手调用 | 门禁三重校验（`x-yindun-client` + `x-yindun-token` + `Yindun/` UA），缺一即 403 |
+| Key 被客户端/安装包提取 | **上游 Key 永不随客户端分发**：只在 Cloudflare 环境变量（Secret）；客户端只带门禁令牌 |
+| 门禁令牌被逆向提取 | 已按此风险设计：令牌是「门禁」不是「模型 Key」。泄露后最坏结果是「别人能用这个**限流 + 白名单**的演示中转」，无法取得上游 Key、无法换模型、无法绕过限流 |
 | 被刷昂贵模型导致欠费 | 模型白名单（默认 `deepseek-v4.1-flash`），名单外自动替换为默认模型 |
 | 被当开放代理 / 通用翻墙入口 | 仅两条固定路由，其它方法 405；上游为代码字面量常量 |
 | SSRF / 内网探测 | 目标 URL 写死 `https://opencode.ai/...`，无任何运行时可变目标 |
 | 跨站盗刷 | CORS 回显白名单 Origin（`*.pages.dev`、localhost、`ALLOWED_ORIGINS`），不使用 `*` |
 | 重定向劫持到其它主机 | `redirect:'manual'`，上游返回 3xx 直接判 502 |
-| 刷接口耗额度 | 每 IP 滑窗限流 20 次/分钟（`request.ip`） |
+| 刷接口耗额度 | 每 IP 滑窗限流 20 次/分钟（`request.ip`），门禁失败也会计入 |
+| 门禁令牌被穷举 | 限流在门禁之前执行，穷举尝试会先撞 429 |
 | 超大请求体 | ≤1MB（既看 `content-length` 也按实际字节数复核） |
 | 超大输出消耗额度 | `max_tokens` 上限 8192 |
 | 慢响应拖垮演示 | 客户端未给 `reasoning_effort` 时默认注入 `none`（优先速度） |

@@ -12,6 +12,13 @@
 //      redirect: 'manual' 且显式拒绝 3xx，杜绝重定向把请求带去其它主机；日志只记状态码。
 //   5. 上游硬要求：必须带 x-opencode-session（随机 UUID），否则 400 MissingSessionID；
 //      必须带常规浏览器 User-Agent，否则 Cloudflare 返回 403 error code 1010。
+//   6. 客户端门禁：只接受隐盾客户端，需同时满足
+//        x-yindun-client: yindun-desktop
+//        x-yindun-token:  <门禁令牌，随客户端分发>
+//        user-agent:      Yindun/<版本> 开头
+//      三者缺一即 403。门禁令牌不是模型 Key（可被逆向提取，泄露后最坏结果是「别人能用这个
+//      限流的演示中转」），真正的 OPENCODE_API_KEY 只存在服务端环境变量里。
+//      注意：Yindun/ UA 只用于「客户端 → 中转站」这一跳，转发上游时仍使用浏览器 UA（见 BROWSER_UA）。
 
 const UPSTREAM_URL = 'https://opencode.ai/zen/go/v1/chat/completions'; // 固定字面量：https + 公开主机
 const DEFAULT_MODEL = 'deepseek-v4.1-flash';
@@ -20,10 +27,24 @@ const DEFAULT_REASONING_EFFORT = 'none'; // 演示优先速度
 const RATE_LIMIT = 20; // 每 IP 每分钟
 const RATE_WINDOW_MS = 60_000;
 const MAX_BODY = 1024 * 1024; // 1MB
+// 门禁（非密钥）：随客户端分发，可被逆向提取；只用于挡掉「非隐盾客户端」的顺手调用。
+const CLIENT_ID_HEADER = 'x-yindun-client';
+const CLIENT_ID_VALUE = 'yindun-desktop';
+const CLIENT_TOKEN_HEADER = 'x-yindun-token';
+const CLIENT_TOKEN_VALUE = 'yd_demo_7f3a9c1e5b2d4f6081a3c5e7d9b0f2a4';
+const CLIENT_UA_PREFIX = 'Yindun/';
 // Cloudflare 会拦截非浏览器 UA（403 error code 1010），这里固定使用常规桌面浏览器 UA。
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
   'Chrome/131.0.0.0 Safari/537.36';
+
+// 客户端门禁：两个请求头 + 客户端 UA。任一项不满足即拒绝（403）。
+function isYindunClient(request) {
+  const clientId = String(request.headers.get(CLIENT_ID_HEADER) || '').trim();
+  const token = String(request.headers.get(CLIENT_TOKEN_HEADER) || '').trim();
+  const ua = String(request.headers.get('user-agent') || '').trim();
+  return clientId === CLIENT_ID_VALUE && token === CLIENT_TOKEN_VALUE && ua.startsWith(CLIENT_UA_PREFIX);
+}
 
 function allowedModels(env) {
   const raw = String((env && env.ALLOWED_MODELS) || DEFAULT_MODEL);
@@ -50,7 +71,7 @@ function corsHeaders(request, env) {
   const origin = String(request.headers.get('origin') || '');
   const h = {
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, x-yindun-client, x-yindun-token',
     'Access-Control-Max-Age': '600',
   };
   if (isAllowedOrigin(origin, env)) {
@@ -110,12 +131,19 @@ export async function onRequestPost(context) {
   const { request, env } = context;
   const h = corsHeaders(request, env);
 
+  // 先限流再验门禁：避免门禁令牌被无成本穷举
+  if (isRateLimited(request.ip)) {
+    return jsonRes(429, { error: { message: '请求过于频繁，请稍后再试' } }, h);
+  }
+
+  // 只接受隐盾客户端（两个头 + 客户端 UA，缺一即 403）
+  if (!isYindunClient(request)) {
+    return jsonRes(403, { error: { message: '仅限隐盾客户端' } }, h);
+  }
+
   const apiKey = env && env.OPENCODE_API_KEY;
   if (!apiKey) {
     return jsonRes(500, { error: { message: 'Relay not configured: OPENCODE_API_KEY missing' } }, h);
-  }
-  if (isRateLimited(request.ip)) {
-    return jsonRes(429, { error: { message: '请求过于频繁，请稍后再试' } }, h);
   }
 
   const declaredLen = Number(request.headers.get('content-length') || 0);
