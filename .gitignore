@@ -1,0 +1,15 @@
+# 依赖与本地调试产物
+node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# 本地环境变量（任何情况下都不要把 key 提交进库）
+.env
+.env.*
+*.local
+
+# 日志/临时文件
+*.log
+tmp/
+*.tmp

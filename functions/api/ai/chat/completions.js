@@ -1,0 +1,200 @@
+// 隐盾安全智能体 · 演示用 AI 中转站（Cloudflare Pages Function）
+// 路由：POST /api/ai/chat/completions（客户端 Base URL 配 https://<项目>.pages.dev/api/ai）
+//
+// 凭据：只读环境变量 OPENCODE_API_KEY（Pages → Settings → Environment variables，密钥类型）。
+//       本仓库任何文件都不包含可用 key，客户端也不接触 key。
+//
+// 安全设计：
+//   1. 上游为代码字面量常量（仅 https + opencode.ai），不含任何运行时可变目标，杜绝 SSRF。
+//   2. 模型白名单：名单外一律替换为默认模型，防止被刷昂贵模型。
+//   3. max_tokens 上限 8192：防止超大输出消耗额度。
+//   4. Origin 白名单 CORS（绝不使用 *）；IP 滑窗限流 20 次/分；请求体 ≤1MB；
+//      redirect: 'manual' 且显式拒绝 3xx，杜绝重定向把请求带去其它主机；日志只记状态码。
+//   5. 上游硬要求：必须带 x-opencode-session（随机 UUID），否则 400 MissingSessionID；
+//      必须带常规浏览器 User-Agent，否则 Cloudflare 返回 403 error code 1010。
+
+const UPSTREAM_URL = 'https://opencode.ai/zen/go/v1/chat/completions'; // 固定字面量：https + 公开主机
+const DEFAULT_MODEL = 'deepseek-v4.1-flash';
+const MAX_TOKENS_CAP = 8192;
+const DEFAULT_REASONING_EFFORT = 'none'; // 演示优先速度
+const RATE_LIMIT = 20; // 每 IP 每分钟
+const RATE_WINDOW_MS = 60_000;
+const MAX_BODY = 1024 * 1024; // 1MB
+// Cloudflare 会拦截非浏览器 UA（403 error code 1010），这里固定使用常规桌面浏览器 UA。
+const BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/131.0.0.0 Safari/537.36';
+
+function allowedModels(env) {
+  const raw = String((env && env.ALLOWED_MODELS) || DEFAULT_MODEL);
+  const set = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+  return set.size ? set : new Set([DEFAULT_MODEL]);
+}
+
+// 显式白名单（ALLOWED_ORIGINS）＋ *.pages.dev ＋ localhost（任意端口）。不使用通配符响应头。
+function allowedOrigins(env) {
+  const raw = String((env && env.ALLOWED_ORIGINS) || '');
+  return new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+function isAllowedOrigin(origin, env) {
+  if (!origin) return false;
+  if (allowedOrigins(env).has(origin)) return true;
+  if (/^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.pages\.dev$/i.test(origin)) return true;
+  if (/^https?:\/\/localhost(:\d{1,5})?$/i.test(origin)) return true;
+  if (/^https?:\/\/127\.0\.0\.1(:\d{1,5})?$/i.test(origin)) return true;
+  return false;
+}
+
+function corsHeaders(request, env) {
+  const origin = String(request.headers.get('origin') || '');
+  const h = {
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '600',
+  };
+  if (isAllowedOrigin(origin, env)) {
+    h['Access-Control-Allow-Origin'] = origin;
+    h['Vary'] = 'Origin';
+  }
+  return h;
+}
+
+// 实例内存级滑窗限流（Workers 每个 isolate 独立计数；对演示额度防滥用足够）
+const rateBuckets = new Map();
+function isRateLimited(clientIp) {
+  const ip = String(clientIp || 'unknown');
+  const now = Date.now();
+  let arr = rateBuckets.get(ip);
+  if (!arr) {
+    arr = [];
+    rateBuckets.set(ip, arr);
+  }
+  while (arr.length && now - arr[0] > RATE_WINDOW_MS) arr.shift();
+  if (arr.length >= RATE_LIMIT) return true;
+  arr.push(now);
+  if (rateBuckets.size > 5000) {
+    for (const [k, v] of rateBuckets) if (!v.length) rateBuckets.delete(k);
+  }
+  return false;
+}
+
+function jsonRes(status, obj, h) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...h },
+  });
+}
+
+function newSessionId() {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    // 极老运行时兜底：仍保证每次请求不同
+    return 'sess-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+}
+
+export async function onRequestOptions(context) {
+  const { request, env } = context;
+  return new Response(null, { status: 204, headers: corsHeaders(request, env) });
+}
+
+// 只开放 POST：其它方法显式 405，避免被当成通用代理使用。
+export async function onRequestGet(context) {
+  const { request, env } = context;
+  return jsonRes(405, { error: { message: 'Method Not Allowed' } }, corsHeaders(request, env));
+}
+
+export async function onRequestPost(context) {
+  const { request, env } = context;
+  const h = corsHeaders(request, env);
+
+  const apiKey = env && env.OPENCODE_API_KEY;
+  if (!apiKey) {
+    return jsonRes(500, { error: { message: 'Relay not configured: OPENCODE_API_KEY missing' } }, h);
+  }
+  if (isRateLimited(request.ip)) {
+    return jsonRes(429, { error: { message: '请求过于频繁，请稍后再试' } }, h);
+  }
+
+  const declaredLen = Number(request.headers.get('content-length') || 0);
+  if (declaredLen > MAX_BODY) {
+    return jsonRes(413, { error: { message: 'Request body too large' } }, h);
+  }
+
+  let rawBody;
+  try {
+    rawBody = await request.text();
+  } catch {
+    return jsonRes(400, { error: { message: 'Invalid request body' } }, h);
+  }
+  // content-length 可能缺失，按实际字节数再卡一次（UTF-8）
+  if (new TextEncoder().encode(rawBody).length > MAX_BODY) {
+    return jsonRes(413, { error: { message: 'Request body too large' } }, h);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return jsonRes(400, { error: { message: 'Invalid JSON body' } }, h);
+  }
+  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.messages)) {
+    return jsonRes(400, { error: { message: 'messages required' } }, h);
+  }
+
+  // 模型白名单：名单外一律替换为默认模型（不报错，体验平滑）
+  const models = allowedModels(env);
+  if (!models.has(payload.model)) payload.model = models.values().next().value;
+
+  // 输出上限：防超大 tokens 消耗额度
+  const mt = payload.max_tokens;
+  if (typeof mt !== 'number' || !Number.isFinite(mt) || mt <= 0 || mt > MAX_TOKENS_CAP) {
+    payload.max_tokens = MAX_TOKENS_CAP;
+  }
+
+  // 客户端未指定思考强度时默认注入 none（演示优先速度）
+  if (payload.reasoning_effort === undefined || payload.reasoning_effort === null || payload.reasoning_effort === '') {
+    payload.reasoning_effort = DEFAULT_REASONING_EFFORT;
+  }
+
+  try {
+    const upstream = await fetch(UPSTREAM_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'User-Agent': BROWSER_UA,
+        'x-opencode-session': newSessionId(),
+        Accept: payload.stream === true ? 'text/event-stream' : 'application/json',
+      },
+      body: JSON.stringify(payload),
+      // Workers 不支持 redirect:'error'；manual + 手动拒绝 3xx，杜绝重定向改写目标主机
+      redirect: 'manual',
+    });
+
+    if (upstream.status >= 300 && upstream.status < 400) {
+      console.log('[yindun-relay] upstream_redirect_rejected');
+      return jsonRes(502, { error: { message: 'Upstream request failed' } }, h);
+    }
+    console.log(`[yindun-relay] status=${upstream.status}`); // 只记状态码，不记请求内容
+
+    const contentType = upstream.headers.get('content-type') || 'application/json';
+    // 流式请求：直接透传上游 body，避免缓冲破坏 SSE
+    if (payload.stream === true && upstream.body) {
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: { 'Content-Type': contentType, 'Cache-Control': 'no-store', ...h },
+      });
+    }
+    const text = await upstream.text();
+    return new Response(text, {
+      status: upstream.status,
+      headers: { 'Content-Type': contentType, ...h },
+    });
+  } catch (err) {
+    console.log(`[yindun-relay] upstream_error=${err && err.name}`);
+    return jsonRes(502, { error: { message: 'Upstream request failed' } }, h);
+  }
+}
