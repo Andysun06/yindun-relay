@@ -240,15 +240,62 @@ export async function onRequestPost(context) {
     const contentType = upstream.headers.get('content-type') || 'application/json';
     // 流式请求：直接透传上游 body，避免缓冲破坏 SSE
     if (payload.stream === true && upstream.body) {
-      // 流式不缓冲响应体，因此只记状态/耗时/问题；回答内容无法在不破坏 SSE 的前提下入库。
-      audit({
-        status: upstream.status,
-        ok: upstream.ok,
-        model: payload.model,
-        stream: true,
-        error: upstream.ok ? '' : `upstream_http_${upstream.status}`,
-      });
-      return new Response(upstream.body, {
+      // 流式：tee 一份给审计线程，客户端那一份仍原样透传（不缓冲、不破坏 SSE）。
+      // 审计线程在流结束后解析 data: 行的 delta.content 与 usage，再写 D1；
+      // 写入失败只记 console，不影响已经发给客户端的响应。
+      const [clientBody, captureBody] = upstream.body.tee();
+      const capture = (async () => {
+        let raw = '';
+        let answer = '';
+        let usage = { prompt: null, completion: null, total: null };
+        try {
+          const reader = captureBody.getReader();
+          const decoder = new TextDecoder();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            raw += decoder.decode(value, { stream: true });
+            if (raw.length > 200_000) raw = raw.slice(-200_000);
+          }
+          for (const line of raw.split(String.fromCharCode(10))) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const data = trimmed.slice(5).trim();
+            if (!data || data === '[DONE]') continue;
+            try {
+              const obj = JSON.parse(data);
+              const delta = obj && obj.choices && obj.choices[0] && obj.choices[0].delta;
+              if (delta && typeof delta.content === 'string') answer += delta.content;
+              if (obj && obj.usage) usage = extractUsage(JSON.stringify({ usage: obj.usage }));
+            } catch {
+              // 单个坏行不影响整体
+            }
+          }
+        } catch (err) {
+          console.log(`[yindun-relay] stream_capture_error=${err && err.name}`);
+        }
+        await recordLog(env, {
+          ts: Date.now(),
+          meta,
+          question,
+          clientVersion: version,
+          latencyMs: Date.now() - started,
+          status: upstream.status,
+          ok: upstream.ok,
+          model: payload.model,
+          stream: true,
+          answer: upstream.ok ? truncate(answer, 2000) : '',
+          usage,
+          error: upstream.ok ? '' : truncate(raw, 300),
+        });
+      })();
+      try {
+        if (context && typeof context.waitUntil === 'function') context.waitUntil(capture);
+        else capture.catch(() => {});
+      } catch {
+        capture.catch(() => {});
+      }
+      return new Response(clientBody, {
         status: upstream.status,
         headers: { 'Content-Type': contentType, 'Cache-Control': 'no-store', ...h },
       });
