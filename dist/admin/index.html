@@ -72,6 +72,22 @@
     .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .filters input { width: 260px; }
     .filters select { width: 130px; }
+    .ipfilter { position: relative; }
+    .ipmenu {
+      position: absolute; top: calc(100% + 6px); left: 0; width: 330px; z-index: 30;
+      background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+      box-shadow: 0 16px 40px rgba(15, 23, 42, .12);
+    }
+    .ipmenu[hidden] { display: none; }
+    .ipmenu input { width: 100%; }
+    .ip-actions { display: flex; gap: 8px; margin: 8px 0; }
+    .ip-actions .btn { padding: 5px 10px; }
+    .ip-list { max-height: 240px; overflow: auto; margin: 4px 0 10px; border-top: 1px solid var(--line); }
+    .ip-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+    .ip-row:hover { background: #f8fafc; }
+    .ip-row input { width: auto; margin: 0; }
+    .ip-row .ip-name { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+    .ip-row .ip-meta { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
     th { color: var(--muted); font-weight: 500; font-size: 11px; white-space: nowrap; background: var(--panel-2); }
@@ -178,6 +194,18 @@
           <option value="4xx">4xx</option>
           <option value="5xx">5xx</option>
         </select>
+        <div class="ipfilter">
+          <button class="btn" id="ip-btn" type="button">IP 筛选（全部）</button>
+          <div class="ipmenu" id="ip-menu" hidden>
+            <input id="ip-search" placeholder="搜索 IP…">
+            <div class="ip-actions">
+              <button class="btn" id="ip-all" type="button">全选</button>
+              <button class="btn" id="ip-none" type="button">清空</button>
+            </div>
+            <div id="ip-list" class="ip-list"></div>
+            <button class="btn btn-primary" id="ip-apply" type="button" style="width:100%">应用筛选</button>
+          </div>
+        </div>
         <button class="btn" id="search">查询</button>
         <span class="spacer"></span>
         <span class="sub" id="list-meta"></span>
@@ -201,7 +229,7 @@
     (() => {
       "use strict";
       const $ = (id) => document.getElementById(id);
-      const state = { hours: 24, offset: 0, limit: 50, total: 0, timer: 0 };
+      const state = { hours: 24, offset: 0, limit: 50, total: 0, timer: 0, selectedIps: [], ipOptions: [] };
 
       async function api(path, options) {
         const res = await fetch(path, {
@@ -226,6 +254,7 @@
         $("login-view").classList.add("hidden");
         $("dash-view").classList.remove("hidden");
         $("who").textContent = user ? `· ${user}` : "";
+        loadIps();
         loadAll();
         clearInterval(state.timer);
         state.timer = setInterval(() => {
@@ -389,6 +418,48 @@
         }
       }
 
+      function updateIpButton() {
+        const n = state.selectedIps.length;
+        $("ip-btn").textContent = n ? `IP 筛选（${n}）` : "IP 筛选（全部）";
+      }
+
+      function renderIpList() {
+        const list = $("ip-list");
+        list.textContent = "";
+        const q = String($("ip-search").value || "").trim().toLowerCase();
+        const rows = state.ipOptions.filter((item) => !q || String(item.ip || "").toLowerCase().includes(q));
+        if (!rows.length) {
+          list.appendChild(el("div", "empty", "没有匹配的 IP"));
+          return;
+        }
+        for (const item of rows) {
+          const row = el("label", "ip-row");
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = state.selectedIps.includes(item.ip);
+          cb.addEventListener("change", () => {
+            const set = new Set(state.selectedIps);
+            if (cb.checked) set.add(item.ip); else set.delete(item.ip);
+            state.selectedIps = [...set];
+            updateIpButton();
+          });
+          const name = el("span", "ip-name", item.ip || "未知");
+          const loc = [item.country, item.city].filter(Boolean).join(" ");
+          const meta = el("span", "ip-meta", `${fmtNum(item.n)} 次${loc ? " · " + loc : ""}`);
+          row.append(cb, name, meta);
+          list.appendChild(row);
+        }
+      }
+
+      async function loadIps() {
+        const { status, data } = await api(`/admin/api/ips?hours=${state.hours}`);
+        if (status === 401) return showLogin("登录已过期，请重新登录");
+        if (!data.ok) return;
+        state.ipOptions = Array.isArray(data.ips) ? data.ips : [];
+        renderIpList();
+        updateIpButton();
+      }
+
       async function loadLogs() {
         const params = new URLSearchParams({
           hours: String(state.hours),
@@ -397,6 +468,7 @@
           status: $("status").value || "all",
           q: $("q").value.trim(),
         });
+        if (state.selectedIps.length) params.set("ips", state.selectedIps.join(","));
         const { status, data } = await api("/admin/api/logs?" + params.toString());
         if (status === 401) return showLogin("登录已过期，请重新登录");
         if (!data.ok) { $("list-meta").textContent = data.error || "查询失败"; return; }
@@ -404,7 +476,9 @@
       }
 
       async function loadStats() {
-        const { status, data } = await api(`/admin/api/stats?hours=${state.hours}`);
+        const ipPart = state.selectedIps.length
+          ? `&ips=${encodeURIComponent(state.selectedIps.join(","))}` : "";
+        const { status, data } = await api(`/admin/api/stats?hours=${state.hours}${ipPart}`);
         if (status === 401) return showLogin("登录已过期，请重新登录");
         if (data.ok) renderStats(data.stats || {});
       }
@@ -451,11 +525,37 @@
           btn.classList.add("active");
           state.hours = Number(btn.dataset.hours) || 24;
           state.offset = 0;
+          loadIps();
           loadAll();
         });
       });
 
-      $("refresh").addEventListener("click", () => loadAll());
+      $("refresh").addEventListener("click", () => { loadIps(); loadAll(); });
+      $("ip-btn").addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const menu = $("ip-menu");
+        menu.hidden = !menu.hidden;
+        if (!menu.hidden) renderIpList();
+      });
+      $("ip-search").addEventListener("input", renderIpList);
+      $("ip-all").addEventListener("click", () => {
+        state.selectedIps = state.ipOptions.map((item) => item.ip);
+        renderIpList();
+        updateIpButton();
+      });
+      $("ip-none").addEventListener("click", () => {
+        state.selectedIps = [];
+        renderIpList();
+        updateIpButton();
+      });
+      $("ip-apply").addEventListener("click", () => {
+        $("ip-menu").hidden = true;
+        state.offset = 0;
+        loadAll();
+      });
+      document.addEventListener("click", (ev) => {
+        if (!ev.target.closest || !ev.target.closest(".ipfilter")) $("ip-menu").hidden = true;
+      });
       $("search").addEventListener("click", () => { state.offset = 0; loadLogs(); });
       $("q").addEventListener("keydown", (ev) => {
         if (ev.key === "Enter") { ev.preventDefault(); state.offset = 0; loadLogs(); }

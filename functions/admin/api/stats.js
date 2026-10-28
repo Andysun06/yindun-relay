@@ -14,6 +14,10 @@ export async function onRequestGet({ request, env }) {
   const url = new URL(request.url);
   const hours = Math.min(24 * 30, Math.max(1, Number(url.searchParams.get("hours")) || 24));
   const since = Date.now() - hours * 3600 * 1000;
+  const ips = String(url.searchParams.get("ips") || "")
+    .split(",").map((v) => v.trim()).filter(Boolean).slice(0, 50);
+  const ipSql = ips.length ? ` AND ip IN (${ips.map(() => "?").join(",")})` : "";
+  const ipParams = ips;
   const tzOffset = 8 * 3600 * 1000; // 展示用北京时间
   const localDayStart = Math.floor((Date.now() + tzOffset) / 86400000) * 86400000 - tzOffset;
 
@@ -28,22 +32,22 @@ export async function onRequestGet({ request, env }) {
               COALESCE(SUM(COALESCE(completion_tokens, 0)), 0) AS completion_tokens,
               COALESCE(SUM(COALESCE(total_tokens, 0)), 0) AS total_tokens,
               COALESCE(SUM(CASE WHEN stream = 1 THEN 1 ELSE 0 END), 0) AS stream_count
-         FROM relay_logs WHERE ts >= ?`
-    ).bind(localDayStart, since).first();
+         FROM relay_logs WHERE ts >= ?${ipSql}`
+    ).bind(localDayStart, since, ...ipParams).first();
 
     const latencyRows = await env.DB.prepare(
       `SELECT latency_ms FROM relay_logs
-        WHERE ts >= ? AND ok = 1 AND latency_ms IS NOT NULL
+        WHERE ts >= ? AND ok = 1 AND latency_ms IS NOT NULL${ipSql}
         ORDER BY latency_ms ASC LIMIT 10000`
-    ).bind(since).all();
+    ).bind(since, ...ipParams).all();
     const latencies = ((latencyRows && latencyRows.results) || [])
       .map((r) => Number(r.latency_ms))
       .filter((n) => Number.isFinite(n));
 
     const hourlyRows = await env.DB.prepare(
       `SELECT ts, ok, prompt_tokens, completion_tokens, total_tokens
-         FROM relay_logs WHERE ts >= ? ORDER BY ts ASC`
-    ).bind(since).all();
+         FROM relay_logs WHERE ts >= ?${ipSql} ORDER BY ts ASC`
+    ).bind(since, ...ipParams).all();
     const buckets = new Map();
     for (const row of (hourlyRows && hourlyRows.results) || []) {
       const hour = Math.floor((Number(row.ts) + tzOffset) / 3600000) * 3600000 - tzOffset;
@@ -74,19 +78,19 @@ export async function onRequestGet({ request, env }) {
               COALESCE(SUM(COALESCE(prompt_tokens, 0)), 0) AS prompt_tokens,
               COALESCE(SUM(COALESCE(completion_tokens, 0)), 0) AS completion_tokens,
               COALESCE(SUM(COALESCE(total_tokens, 0)), 0) AS total_tokens
-         FROM relay_logs WHERE ts >= ? GROUP BY model ORDER BY n DESC LIMIT 6`
-    ).bind(since).all();
+         FROM relay_logs WHERE ts >= ?${ipSql} GROUP BY model ORDER BY n DESC LIMIT 6`
+    ).bind(since, ...ipParams).all();
 
     const statusRows = await env.DB.prepare(
       `SELECT status, COUNT(*) AS n FROM relay_logs
-        WHERE ts >= ? GROUP BY status ORDER BY n DESC LIMIT 12`
-    ).bind(since).all();
+        WHERE ts >= ?${ipSql} GROUP BY status ORDER BY n DESC LIMIT 12`
+    ).bind(since, ...ipParams).all();
 
     const ipRows = await env.DB.prepare(
       `SELECT COALESCE(NULLIF(ip, ''), '未知') AS ip, COUNT(*) AS n,
               COALESCE(SUM(COALESCE(total_tokens, 0)), 0) AS tokens
-         FROM relay_logs WHERE ts >= ? GROUP BY ip ORDER BY n DESC LIMIT 8`
-    ).bind(since).all();
+         FROM relay_logs WHERE ts >= ?${ipSql} GROUP BY ip ORDER BY n DESC LIMIT 8`
+    ).bind(since, ...ipParams).all();
 
     const total = Number((summary && summary.total) || 0);
     const okCount = Number((summary && summary.ok_count) || 0);
@@ -94,6 +98,7 @@ export async function onRequestGet({ request, env }) {
       ok: true,
       stats: {
         hours,
+        selectedIps: ips,
         total,
         okCount,
         errorCount: Math.max(0, total - okCount),

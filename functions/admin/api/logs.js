@@ -19,10 +19,16 @@ export async function onRequestGet({ request, env }) {
   const offset = intParam(url.searchParams.get("offset"), 0, 0, 1_000_000);
   const status = String(url.searchParams.get("status") || "all");
   const query = String(url.searchParams.get("q") || "").trim().slice(0, 200);
+  const ips = String(url.searchParams.get("ips") || "")
+    .split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50);
   const since = Date.now() - hours * 3600 * 1000;
 
   const where = ["ts >= ?"];
   const params = [since];
+  if (ips.length) {
+    where.push(`ip IN (${ips.map(() => "?").join(",")})`);
+    params.push(...ips);
+  }
   if (status === "ok") {
     where.push("ok = 1");
   } else if (status === "error") {
