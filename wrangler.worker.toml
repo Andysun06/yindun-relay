@@ -1,0 +1,10 @@
+# 可选：以 Cloudflare Worker 形态部署（Pages 仍是主形态）
+# 用法：npx wrangler deploy --config wrangler.worker.toml
+name = "yindun-relay"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "yindun-relay-logs"
+database_id = "1f5decf4-5bd8-4467-85d0-8a91b44c059f"

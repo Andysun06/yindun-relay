@@ -1,5 +1,18 @@
+# 隐盾演示中转站（Cloudflare Pages）
+# 说明：本文件按 Pages 项目配置；src/worker.js 仍保留为可选 Worker 入口（见 wrangler.worker.toml）。
 name = "yindun-relay"
-main = "src/worker.js"
+pages_build_output_dir = "dist"
 compatibility_date = "2026-10-01"
-# 变量在 Cloudflare 控制台配置（Settings → Variables and Secrets）：
-#   OPENCODE_API_KEY（Secret）  可选 ALLOWED_MODELS / ALLOWED_ORIGINS
+
+# 请求审计日志（控制台 /admin/ 读取）
+[[d1_databases]]
+binding = "DB"
+database_name = "yindun-relay-logs"
+database_id = "1f5decf4-5bd8-4467-85d0-8a91b44c059f"
+
+# 环境变量在 Cloudflare Pages → Settings → Variables and Secrets 配置：
+#   OPENCODE_API_KEY（Secret）     上游模型 Key
+#   ADMIN_PASSWORD_HASH（Secret）  管理员密码 PBKDF2 哈希（格式见 functions/_lib/admin.js）
+#   ADMIN_SESSION_SECRET（Secret） 会话 Cookie 的 HMAC 密钥（随机 32 字节）
+#   ADMIN_USER（可选，默认 Andy）
+#   ALLOWED_MODELS / ALLOWED_ORIGINS（可选）

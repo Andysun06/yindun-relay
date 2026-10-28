@@ -20,6 +20,8 @@
 //      限流的演示中转」），真正的 OPENCODE_API_KEY 只存在服务端环境变量里。
 //      注意：Yindun/ UA 只用于「客户端 → 中转站」这一跳，转发上游时仍使用浏览器 UA（见 BROWSER_UA）。
 
+import { recordLog, requestMeta, extractQuestion, extractAnswer, extractUsage, clientVersion, truncate } from '../../../_lib/logs.js';
+
 const UPSTREAM_URL = 'https://opencode.ai/zen/go/v1/chat/completions'; // 固定字面量：https + 公开主机
 const DEFAULT_MODEL = 'deepseek-v4.1-flash';
 const MAX_TOKENS_CAP = 8192;
@@ -130,24 +132,43 @@ export async function onRequestGet(context) {
 export async function onRequestPost(context) {
   const { request, env } = context;
   const h = corsHeaders(request, env);
+  const started = Date.now();
+  const meta = requestMeta(request);
+  const version = clientVersion(meta.ua);
+  let question = "";
+
+  // 审计：不阻塞响应（Pages/Worker 的 waitUntil 会在响应后继续写 D1）。
+  const audit = (fields) => recordLog(env, {
+    ts: Date.now(),
+    meta,
+    question,
+    clientVersion: version,
+    latencyMs: Date.now() - started,
+    ...fields,
+  }, context);
 
   // 先限流再验门禁：避免门禁令牌被无成本穷举
   if (isRateLimited(request.ip)) {
+    // 未通过门禁的请求只写 console，不写 D1：避免被公网刷日志、把审计库撑满。
+    console.log('[yindun-relay] rate_limited');
     return jsonRes(429, { error: { message: '请求过于频繁，请稍后再试' } }, h);
   }
 
   // 只接受隐盾客户端（两个头 + 客户端 UA，缺一即 403）
   if (!isYindunClient(request)) {
+    console.log('[yindun-relay] client_gate_rejected');
     return jsonRes(403, { error: { message: '仅限隐盾客户端' } }, h);
   }
 
   const apiKey = env && env.OPENCODE_API_KEY;
   if (!apiKey) {
+    audit({ status: 500, ok: false, error: 'OPENCODE_API_KEY missing' });
     return jsonRes(500, { error: { message: 'Relay not configured: OPENCODE_API_KEY missing' } }, h);
   }
 
   const declaredLen = Number(request.headers.get('content-length') || 0);
   if (declaredLen > MAX_BODY) {
+    audit({ status: 413, ok: false, error: 'request_too_large' });
     return jsonRes(413, { error: { message: 'Request body too large' } }, h);
   }
 
@@ -155,10 +176,12 @@ export async function onRequestPost(context) {
   try {
     rawBody = await request.text();
   } catch {
+    audit({ status: 400, ok: false, error: 'invalid_body' });
     return jsonRes(400, { error: { message: 'Invalid request body' } }, h);
   }
   // content-length 可能缺失，按实际字节数再卡一次（UTF-8）
   if (new TextEncoder().encode(rawBody).length > MAX_BODY) {
+    audit({ status: 413, ok: false, error: 'request_too_large' });
     return jsonRes(413, { error: { message: 'Request body too large' } }, h);
   }
 
@@ -166,11 +189,16 @@ export async function onRequestPost(context) {
   try {
     payload = JSON.parse(rawBody);
   } catch {
+    audit({ status: 400, ok: false, error: 'invalid_json' });
     return jsonRes(400, { error: { message: 'Invalid JSON body' } }, h);
   }
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.messages)) {
+    audit({ status: 400, ok: false, error: 'messages_required' });
     return jsonRes(400, { error: { message: 'messages required' } }, h);
   }
+
+  // 只记最后一条用户消息（截断 2000 字），用于管理员回看“评委问了什么”。
+  question = extractQuestion(payload.messages);
 
   // 模型白名单：名单外一律替换为默认模型（不报错，体验平滑）
   const models = allowedModels(env);
@@ -204,6 +232,7 @@ export async function onRequestPost(context) {
 
     if (upstream.status >= 300 && upstream.status < 400) {
       console.log('[yindun-relay] upstream_redirect_rejected');
+      audit({ status: 502, ok: false, model: payload.model, stream: !!payload.stream, error: 'upstream_redirect' });
       return jsonRes(502, { error: { message: 'Upstream request failed' } }, h);
     }
     console.log(`[yindun-relay] status=${upstream.status}`); // 只记状态码，不记请求内容
@@ -211,18 +240,37 @@ export async function onRequestPost(context) {
     const contentType = upstream.headers.get('content-type') || 'application/json';
     // 流式请求：直接透传上游 body，避免缓冲破坏 SSE
     if (payload.stream === true && upstream.body) {
+      // 流式不缓冲响应体，因此只记状态/耗时/问题；回答内容无法在不破坏 SSE 的前提下入库。
+      audit({
+        status: upstream.status,
+        ok: upstream.ok,
+        model: payload.model,
+        stream: true,
+        error: upstream.ok ? '' : `upstream_http_${upstream.status}`,
+      });
       return new Response(upstream.body, {
         status: upstream.status,
         headers: { 'Content-Type': contentType, 'Cache-Control': 'no-store', ...h },
       });
     }
     const text = await upstream.text();
+    const usage = extractUsage(text);
+    audit({
+      status: upstream.status,
+      ok: upstream.ok,
+      model: payload.model,
+      stream: false,
+      answer: upstream.ok ? extractAnswer(text) : '',
+      usage,
+      error: upstream.ok ? '' : truncate(text, 300),
+    });
     return new Response(text, {
       status: upstream.status,
       headers: { 'Content-Type': contentType, ...h },
     });
   } catch (err) {
     console.log(`[yindun-relay] upstream_error=${err && err.name}`);
+    audit({ status: 502, ok: false, model: payload.model, stream: !!payload.stream, error: `upstream_error_${err && err.name}` });
     return jsonRes(502, { error: { message: 'Upstream request failed' } }, h);
   }
 }

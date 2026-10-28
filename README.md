@@ -6,7 +6,8 @@
 - API Key 只存在 Cloudflare 环境变量 `OPENCODE_API_KEY` 里，**客户端零凭据**；
 - 本仓库任何文件都不包含可用 key；
 - 上游地址是代码里的字面量常量，**不接受任何运行时改写**（防 SSRF）；
-- 只接受**隐盾客户端**的请求（两个门禁请求头 + `Yindun/` UA），其它来源一律 `403`。
+- 只接受**隐盾客户端**的请求（两个门禁请求头 + `Yindun/` UA），其它来源一律 `403`；
+- 自带**管理控制台** `/admin/`：登录后可看请求量、成功率、P50/P95 耗时、趋势与逐条审计（问题/回答/状态/延迟）。
 
 ## 路由
 
@@ -15,8 +16,15 @@
 | `POST` | `/api/ai/chat/completions` | **需要** | OpenAI 兼容的对话补全；支持 `tools`（函数调用）与 `stream:true` 透传 |
 | `GET` | `/api/ai/healthz` | 不需要 | 健康检查，返回 `{ ok, configured, ts }` |
 | `OPTIONS` | 上述两条 | 不需要 | CORS 预检（回显白名单 Origin，绝不返回 `*`） |
+| `GET` | `/admin/` | **登录** | 管理控制台（登录页 + 仪表盘） |
+| `POST` | `/admin/api/login` | 否 | 管理员登录，成功后下发 HttpOnly 会话 Cookie |
+| `GET` | `/admin/api/session` | **登录** | 当前会话 |
+| `GET` | `/admin/api/stats` | **登录** | 请求量 / 成功率 / P50 / P95 / 趋势 |
+| `GET` | `/admin/api/logs` | **登录** | 逐条审计（分页、状态筛选、关键词搜索） |
+| `POST` | `/admin/api/logout` | **登录** | 退出并清除 Cookie |
 
-其它方法一律 `405 Method Not Allowed`。
+其它方法一律 `405 Method Not Allowed`。控制台页面本身不含数据；未登录时所有 `/admin/api/*`
+返回 `401`，页面上什么都看不到。
 
 ## 客户端门禁（只接受隐盾客户端）
 
@@ -32,18 +40,53 @@
 > `GET /api/ai/healthz` 不设门禁（客户端需要在握手阶段就能探测可达性），但它不含任何敏感信息。
 
 
-## 部署（Cloudflare Pages，约 3 分钟）
+## 部署（Cloudflare Pages + D1，约 5 分钟）
 
-1. 先在本仓库创建好 Pages 项目：Cloudflare 控制台 → **Workers 和 Pages → 创建 → Pages → 连接到 Git**，
-   选择 `Andysun06/yindun-relay`。
-2. 构建配置：框架预设选 **None**，**构建命令留空**，**输出目录留空**（本项目只有 Functions，无静态资源）。
-3. **Settings → Environment variables** 添加：
-   - `OPENCODE_API_KEY`：你的 OpenCode Go Key，类型选 **Secret / 密钥**（必填）；
-   - 可选 `ALLOWED_MODELS`：逗号分隔的模型白名单，默认 `deepseek-v4.1-flash`；
-   - 可选 `ALLOWED_ORIGINS`：额外允许的来源（逗号分隔，例如自定义域），默认已放行 `*.pages.dev` 与 localhost。
-4. 保存后 **重新部署一次**（环境变量在下一次部署才生效；也可 Deployments → Retry deployment）。
-5. 自检：浏览器打开 `https://<项目>.pages.dev/api/ai/healthz`，
-   应看到 `{"ok":true,"configured":true,"ts":...}`；`configured:false` 说明第 3 步的变量没生效。
+### 1. 创建 Pages 项目与 D1
+
+```bash
+# 已登录 Cloudflare（npx wrangler login）
+npx wrangler pages project create yindun-relay --production-branch main
+npx wrangler d1 create yindun-relay-logs
+# 把输出的 database_id 填进 wrangler.toml 的 [[d1_databases]]
+npx wrangler d1 execute yindun-relay-logs --remote --file=./schema.sql
+```
+
+### 2. 配置 Secrets
+
+在 Cloudflare Pages → **Settings → Variables and Secrets** 添加（类型选 Secret）：
+
+| 变量 | 说明 |
+| --- | --- |
+| `OPENCODE_API_KEY` | OpenCode Go 的上游 Key（必填） |
+| `ADMIN_PASSWORD_HASH` | 管理员密码的 PBKDF2-SHA256 哈希（必填，见下） |
+| `ADMIN_SESSION_SECRET` | 会话 Cookie 的 HMAC 密钥，随机 32 字节十六进制（必填） |
+| `ADMIN_USER` | 可选，默认 `Andy` |
+| `ALLOWED_MODELS` / `ALLOWED_ORIGINS` | 可选，模型白名单 / 额外 CORS 来源 |
+
+生成密码哈希（交互式输入密码，不回显、不落盘）：
+
+```bash
+python -c "import hashlib,base64,secrets,getpass; p=getpass.getpass('password: ').encode(); s=secrets.token_bytes(16); h=hashlib.pbkdf2_hmac('sha256',p,s,10000,32); b=lambda x: base64.urlsafe_b64encode(x).decode().rstrip('='); print('pbkdf2$sha256$10000$'+b(s)+'$'+b(h))"
+```
+
+> 迭代次数固定为 **10000**：Cloudflare Pages Functions 的 CPU 时间较紧，15 万次 PBKDF2 会触发
+> `error 1101`；10000 次在演示规模下足够配合「登录失败 5 次/10 分钟」限流使用。
+
+### 3. 部署
+
+```bash
+npx wrangler pages deploy dist --project-name yindun-relay --branch main
+```
+
+首次部署后自检：
+
+```bash
+curl https://<项目>.pages.dev/api/ai/healthz     # {"ok":true,"configured":true,...}
+curl -i https://<项目>.pages.dev/admin/api/session  # 401（未登录）
+```
+
+浏览器打开 `https://<项目>.pages.dev/admin/`，用负责人保管的用户名/密码登录。
 
 ## 客户端接入
 
@@ -94,10 +137,23 @@ User-Agent: Yindun/3.6.21
 | 超大请求体 | ≤1MB（既看 `content-length` 也按实际字节数复核） |
 | 超大输出消耗额度 | `max_tokens` 上限 8192 |
 | 慢响应拖垮演示 | 客户端未给 `reasoning_effort` 时默认注入 `none`（优先速度） |
-| 日志泄露对话内容 | 日志只记录上游状态码 |
+| 审计库泄露对话内容 | 只有管理员登录后可读；问题/回答各截断 2000 字存 D1；未通过门禁的请求不写库 |
 
 > 限流计数在单个 Workers isolate 内存中，属于「防滥用」而非「精确配额」；需要严格执行时请加 Cloudflare
 > Rate Limiting 规则或 Durable Object。
+
+## 管理控制台
+
+- 地址：`https://<项目>.pages.dev/admin/`；用户名默认 `Andy`，密码由负责人保管。
+- 登录状态 12 小时；Cookie 为 `HttpOnly + Secure + SameSite=Strict`，内容用 `ADMIN_SESSION_SECRET`
+  做 HMAC-SHA256 签名，改一个字节即失效。
+- 页面显示：请求总数、成功率、P50/P95 耗时、独立 IP、今日请求、按小时趋势；逐条记录时间、IP/地区、
+  客户端版本、模型、状态码、耗时、问题与回答（点击展开）；支持 1 小时 / 24 小时 / 7 天、状态筛选、
+  关键词搜索、分页与 15 秒自动刷新。
+- 审计数据存 Cloudflare D1（`relay_logs` 表），只有 `/admin/api/*` 在通过会话校验后读取；
+  未登录访问一律 `401`。
+- **隐私说明**：为了让负责人知道“评委问了什么”，问题与回答会截断 2000 字后写入 D1；如果某场演示
+  涉及不应留存的敏感内容，可在 `functions/_lib/logs.js` 把 `question`/`answer` 置空后重新部署。
 
 ## 本地自测（可选）
 
