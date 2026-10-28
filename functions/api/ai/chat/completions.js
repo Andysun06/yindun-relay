@@ -215,6 +215,12 @@ export async function onRequestPost(context) {
     payload.reasoning_effort = DEFAULT_REASONING_EFFORT;
   }
 
+  // 流式请求要求上游在最后一个 chunk 带 usage（OpenAI 兼容参数）。
+  // 这样控制台才能把输入/输出 token 分开统计，而不是只能看到非流式请求的用量。
+  if (payload.stream === true && payload.stream_options === undefined) {
+    payload.stream_options = { include_usage: true };
+  }
+
   try {
     const upstream = await fetch(UPSTREAM_URL, {
       method: 'POST',

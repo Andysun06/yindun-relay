@@ -7,9 +7,10 @@
   <title>隐盾中转站 · 管理控制台</title>
   <style>
     :root {
-      --bg: #0b0f14; --panel: #121821; --panel-2: #0f151d; --line: #222c38;
-      --text: #e8eef6; --muted: #8b9bb0; --accent: #3b82f6; --accent-2: #60a5fa;
-      --ok: #34d399; --warn: #fbbf24; --bad: #f87171; --radius: 14px;
+      --bg: #f6f8fb; --panel: #ffffff; --panel-2: #f8fafc; --line: #e5eaf0;
+      --text: #0f172a; --muted: #64748b; --accent: #2563eb; --accent-2: #3b82f6;
+      --accent-soft: #eff6ff; --ok: #059669; --warn: #d97706; --bad: #dc2626;
+      --radius: 12px;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
@@ -19,77 +20,83 @@
     .hidden { display: none !important; }
     .wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
     .card {
-      width: min(420px, 100%); background: linear-gradient(180deg, #141c26, #10161e);
-      border: 1px solid var(--line); border-radius: 18px; padding: 30px 28px;
-      box-shadow: 0 24px 80px rgba(0, 0, 0, .45);
+      width: min(420px, 100%); background: var(--panel); border: 1px solid var(--line);
+      border-radius: 16px; padding: 30px 28px; box-shadow: 0 16px 48px rgba(15, 23, 42, .07);
     }
     .brand { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; }
     .logo {
       width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
-      background: linear-gradient(135deg, #1d4ed8, #3b82f6); font-weight: 700; font-size: 19px;
+      background: var(--accent); color: #fff; font-weight: 700; font-size: 19px;
     }
     .brand h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
     .brand p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
     label { display: block; color: var(--muted); font-size: 12px; margin: 14px 0 6px; }
     input, select {
-      width: 100%; background: #0b1118; border: 1px solid var(--line); color: var(--text);
-      border-radius: 10px; padding: 10px 12px; outline: none;
+      width: 100%; background: #fff; border: 1px solid var(--line); color: var(--text);
+      border-radius: 8px; padding: 10px 12px; outline: none;
     }
-    input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.16); }
+    input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, .12); }
     .btn {
-      border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-      border-radius: 10px; padding: 9px 14px;
+      border: 1px solid var(--line); background: #fff; color: var(--text);
+      border-radius: 8px; padding: 9px 14px;
     }
-    .btn:hover { border-color: #33465e; }
-    .btn-primary { background: linear-gradient(135deg, #2563eb, #3b82f6); border-color: #2563eb; font-weight: 600; }
-    .btn-primary:hover { filter: brightness(1.06); }
+    .btn:hover { border-color: #c7d2e1; background: #fbfdff; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .btn-primary:hover { background: #1d4ed8; border-color: #1d4ed8; }
     .btn-block { width: 100%; margin-top: 20px; padding: 11px; }
     .msg { min-height: 20px; margin-top: 12px; font-size: 12px; color: var(--bad); }
     .hint { color: var(--muted); font-size: 11px; line-height: 1.7; margin: 18px 0 0; }
-    /* dashboard */
-    .shell { max-width: 1360px; margin: 0 auto; padding: 22px 26px 48px; }
-    .top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
-    .top h1 { font-size: 19px; margin: 0; }
-    .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--ok); box-shadow: 0 0 0 4px rgba(52,211,153,.12); }
+    .shell { max-width: 1400px; margin: 0 auto; padding: 22px 26px 48px; }
+    .top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+    .top h1 { font-size: 19px; margin: 0; letter-spacing: .1px; }
+    .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--ok); box-shadow: 0 0 0 4px rgba(5,150,105,.12); }
     .sub { color: var(--muted); font-size: 12px; }
     .spacer { flex: 1; }
-    .seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
-    .seg button { background: transparent; border: 0; color: var(--muted); padding: 6px 11px; border-radius: 8px; }
-    .seg button.active { background: #1b2635; color: var(--text); }
-    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+    .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+    .seg button { background: transparent; border: 0; color: var(--muted); padding: 6px 11px; border-radius: 6px; }
+    .seg button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
     .stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 16px; }
     .stat .k { color: var(--muted); font-size: 12px; }
-    .stat .v { font-size: 26px; font-weight: 650; margin-top: 6px; font-variant-numeric: tabular-nums; }
+    .stat .v { font-size: 26px; font-weight: 650; margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
     .stat .s { color: var(--muted); font-size: 11px; margin-top: 4px; }
-    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; }
-    .panel h2 { font-size: 13px; margin: 0 0 12px; color: #b9c7da; font-weight: 600; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
+    .panel h2 { font-size: 13px; margin: 0 0 12px; color: #334155; font-weight: 600; }
     .chart { height: 150px; display: flex; align-items: flex-end; justify-content: center; gap: 5px; padding-top: 8px; }
-    .bar { flex: 1; max-width: 42px; min-width: 3px; background: linear-gradient(180deg, #60a5fa, #2563eb); border-radius: 3px 3px 0 0; position: relative; min-height: 2px; }
-    .bar.bad { background: linear-gradient(180deg, #f87171, #b91c1c); }
-    .bar:hover::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: #0b1118; border: 1px solid var(--line); padding: 4px 7px; border-radius: 6px; font-size: 11px; white-space: nowrap; z-index: 2; }
+    .bar { flex: 1; max-width: 42px; min-width: 3px; background: var(--accent-2); border-radius: 2px 2px 0 0; position: relative; min-height: 2px; }
+    .bar.bad { background: #ef4444; }
+    .bar:hover::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: #0f172a; color: #fff; padding: 4px 7px; border-radius: 6px; font-size: 11px; white-space: nowrap; z-index: 2; }
     .axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; margin-top: 6px; }
     .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .filters input { width: 260px; }
     .filters select { width: 130px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    th { color: var(--muted); font-weight: 500; font-size: 11px; white-space: nowrap; }
+    th { color: var(--muted); font-weight: 500; font-size: 11px; white-space: nowrap; background: var(--panel-2); }
     td { font-size: 12.5px; }
     tr.log { cursor: pointer; }
-    tr.log:hover td { background: #151d28; }
+    tr.log:hover td { background: #f8fbff; }
     .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
-    .badge.ok { color: var(--ok); border-color: rgba(52,211,153,.35); background: rgba(52,211,153,.08); }
-    .badge.bad { color: var(--bad); border-color: rgba(248,113,113,.35); background: rgba(248,113,113,.08); }
+    .badge.ok { color: var(--ok); border-color: #a7f3d0; background: #ecfdf5; }
+    .badge.bad { color: var(--bad); border-color: #fecaca; background: #fef2f2; }
     .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-    .q { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cdd9e8; }
-    .detail td { background: #0d131b; }
+    .q { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #334155; }
+    .detail td { background: #f8fafc; }
     .detail .box { display: grid; gap: 10px; padding: 4px 2px 8px; }
     .detail .label { color: var(--muted); font-size: 11px; margin-bottom: 3px; }
-    .detail pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.65; color: #dbe6f3; background: #0a1017; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; max-height: 220px; overflow: auto; }
+    .detail pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.65; color: #1e293b; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; max-height: 220px; overflow: auto; }
     .empty { color: var(--muted); text-align: center; padding: 28px 0; font-size: 13px; }
     .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 12px; color: var(--muted); font-size: 12px; }
     .err { color: var(--bad); }
-    @media (max-width: 900px) { .cards { grid-template-columns: repeat(2, 1fr); } .q { max-width: 240px; } }
+    .mini-table td, .mini-table th { padding: 7px 8px; }
+    .mini-table td:last-child, .mini-table th:last-child { text-align: right; white-space: nowrap; }
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: repeat(2, 1fr); }
+      .grid2 { grid-template-columns: 1fr; }
+      .q { max-width: 240px; }
+    }
   </style>
 </head>
 <body>
@@ -131,10 +138,34 @@
       <div class="stat"><div class="k">P95 耗时</div><div class="v" id="s-p95">—</div><div class="s" id="s-ips">独立 IP —</div></div>
     </div>
 
+    <div class="cards">
+      <div class="stat"><div class="k">Token 总量</div><div class="v" id="s-tokens">—</div><div class="s" id="s-token-note">输入 — / 输出 —</div></div>
+      <div class="stat"><div class="k">输入 Tokens</div><div class="v" id="s-prompt">—</div><div class="s">prompt_tokens</div></div>
+      <div class="stat"><div class="k">输出 Tokens</div><div class="v" id="s-completion">—</div><div class="s">completion_tokens</div></div>
+      <div class="stat"><div class="k">平均 Tokens / 请求</div><div class="v" id="s-avg-tokens">—</div><div class="s" id="s-stream">流式 —</div></div>
+    </div>
+
     <div class="panel">
       <h2>请求趋势（北京时间）</h2>
       <div class="chart" id="chart"></div>
       <div class="axis"><span id="axis-left"></span><span id="axis-right"></span></div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h2>模型分布</h2>
+        <table class="mini-table">
+          <thead><tr><th>模型</th><th>请求</th><th>Tokens</th></tr></thead>
+          <tbody id="models"></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h2>来源 IP Top</h2>
+        <table class="mini-table">
+          <thead><tr><th>IP</th><th>请求</th><th>Tokens</th></tr></thead>
+          <tbody id="ips"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="panel">
@@ -153,7 +184,7 @@
       </div>
       <div style="overflow-x:auto; margin-top: 12px;">
         <table>
-          <thead><tr><th>时间</th><th>来源</th><th>客户端</th><th>模型</th><th>状态</th><th>耗时</th><th>问题</th></tr></thead>
+          <thead><tr><th>时间</th><th>来源</th><th>客户端</th><th>模型</th><th>状态</th><th>耗时</th><th>Tokens（入/出）</th><th>问题</th></tr></thead>
           <tbody id="logs"></tbody>
         </table>
       </div>
@@ -208,6 +239,12 @@
         return d.toLocaleString("zh-CN", { hour12: false });
       }
 
+      function fmtNum(n) {
+        const v = Number(n);
+        if (!Number.isFinite(v)) return "—";
+        return v.toLocaleString("zh-CN");
+      }
+
       function fmtMs(ms) {
         const n = Number(ms);
         if (!Number.isFinite(n) || n <= 0) return "—";
@@ -237,6 +274,14 @@
         $("s-avg").textContent = `平均 ${fmtMs(stats.avgLatency)}`;
         $("s-p95").textContent = fmtMs(stats.p95);
         $("s-ips").textContent = `独立 IP ${Number(stats.uniqueIps || 0).toLocaleString()}`;
+        $("s-tokens").textContent = fmtNum(stats.totalTokens);
+        $("s-token-note").textContent = `输入 ${fmtNum(stats.promptTokens)} / 输出 ${fmtNum(stats.completionTokens)}`;
+        $("s-prompt").textContent = fmtNum(stats.promptTokens);
+        $("s-completion").textContent = fmtNum(stats.completionTokens);
+        $("s-avg-tokens").textContent = fmtNum(Math.round(Number(stats.avgTokens || 0)));
+        $("s-stream").textContent = `流式 ${fmtNum(stats.streamCount)} 次`;
+        renderBreakdown("models", stats.models, "model");
+        renderBreakdown("ips", stats.topIps, "ip");
 
         const chart = $("chart");
         chart.textContent = "";
@@ -258,6 +303,28 @@
         });
         $("axis-left").textContent = new Date(Number(series[0].hour)).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false });
         $("axis-right").textContent = new Date(Number(series[series.length - 1].hour)).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false });
+      }
+
+      function renderBreakdown(tbodyId, rows, key) {
+        const tbody = $(tbodyId);
+        tbody.textContent = "";
+        const list = Array.isArray(rows) ? rows : [];
+        if (!list.length) {
+          const tr = el("tr");
+          const td = el("td", "empty", "暂无数据");
+          td.colSpan = 3;
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
+        for (const row of list) {
+          const tr = el("tr");
+          tr.appendChild(el("td", "mono", row[key] || "—"));
+          tr.appendChild(el("td", "mono", fmtNum(row.n)));
+          const tokenValue = row.total_tokens != null ? row.total_tokens : row.tokens;
+          tr.appendChild(el("td", "mono", fmtNum(tokenValue)));
+          tbody.appendChild(tr);
+        }
       }
 
       function renderLogs(payload) {
@@ -287,16 +354,20 @@
           status.appendChild(statusBadge(row.status));
           if (Number(row.stream)) status.appendChild(el("span", "sub", " 流式"));
           const latency = el("td", "mono", fmtMs(row.latency_ms));
+          const tokens = el("td", "mono", row.total_tokens
+            ? `${fmtNum(row.prompt_tokens)} / ${fmtNum(row.completion_tokens)}`
+            : "—");
+          tokens.title = row.total_tokens ? `合计 ${fmtNum(row.total_tokens)}` : "";
           const question = el("td");
           const q = el("div", "q", row.question || (row.error ? `（未记录问题）${row.error}` : "—"));
           q.title = row.question || "";
           question.appendChild(q);
-          tr.append(time, where, client, model, status, latency, question);
+          tr.append(time, where, client, model, status, latency, tokens, question);
           tbody.appendChild(tr);
 
           const detail = el("tr", "detail");
           const cell = el("td");
-          cell.colSpan = 7;
+          cell.colSpan = 8;
           const box = el("div", "box");
           const add = (label, text) => {
             if (!text) return;
